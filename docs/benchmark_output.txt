@@ -1,0 +1,10 @@
+=== 100-session record/replay determinism ===
+{"sessions": 100, "matches": 100, "merge_mode": "tick_keyed", "ticks": 200, "rate_hz": 200.0, "elapsed_sec": 103.05}
+
+=== Hop latency, 12-block graph, 200 Hz, 2000 ticks/session, 3 genuine attempts ===
+Attempt 1:
+{"run": {"run_id": "hoplat_098250db", "session_digest": "3173546cfe77a340b532413cab80578cfc9a799029136546539601f71e8bb49e", "exit_ok": true}, "hop_latency": {"n": 22000, "p50_ns": 4114, "p95_ns": 19844, "p99_ns": 352246, "max_ns": 16637217}}
+Attempt 2:
+{"run": {"run_id": "hoplat_69229291", "session_digest": "b54bee18a8b5c5b592c5dc065a623085d6ff8ba272e2523a53eac9367aaed9f7", "exit_ok": true}, "hop_latency": {"n": 22000, "p50_ns": 4308, "p95_ns": 22194, "p99_ns": 1690089, "max_ns": 13958081}}
+Attempt 3:
+{"run": {"run_id": "hoplat_7df6cdca", "session_digest": "1134a57d7f9cc960aa556d2afd3408dd529ef5a36598bab56e2050f2b1f45353", "exit_ok": true}, "hop_latency": {"n": 22000, "p50_ns": 4065, "p95_ns": 15489, "p99_ns": 51013, "max_ns": 14684171}}

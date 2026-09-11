@@ -1,0 +1,8 @@
+=== AddressSanitizer + UBSan, Debug build (ENABLE_ASAN=ON) ===
+--- check_ring_buffer ---
+check_ring_buffer: 119361 checks passed
+--- check_sha256 ---
+check_sha256: 7 checks passed
+
+=== ThreadSanitizer, Debug build (ENABLE_TSAN=ON), setarch -R (ASLR off) ===
+check_ring_buffer: 120604 checks passed

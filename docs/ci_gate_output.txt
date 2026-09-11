@@ -1,0 +1,277 @@
+{
+  "baseline_sessions": 8,
+  "baseline_ceiling_ns": 7416,
+  "threshold_ns": 37080,
+  "regression_trials": 20,
+  "caught": 20,
+  "control_sessions": 20,
+  "false_positives": 0,
+  "trial_records": [
+    {
+      "trial": 0,
+      "seeded_block": "t1",
+      "flagged": [
+        "m1",
+        "m3",
+        "t1"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 1,
+      "seeded_block": "t2",
+      "flagged": [
+        "m1",
+        "m3",
+        "t2"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 2,
+      "seeded_block": "t3",
+      "flagged": [
+        "m2",
+        "m3",
+        "t3"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 3,
+      "seeded_block": "t4",
+      "flagged": [
+        "m2",
+        "m3",
+        "t4"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 4,
+      "seeded_block": "m1",
+      "flagged": [
+        "m1",
+        "m3"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 5,
+      "seeded_block": "m2",
+      "flagged": [
+        "m2",
+        "m3"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 6,
+      "seeded_block": "t5",
+      "flagged": [
+        "m3",
+        "t5"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 7,
+      "seeded_block": "t6",
+      "flagged": [
+        "m3",
+        "t6"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 8,
+      "seeded_block": "m3",
+      "flagged": [
+        "m3"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 9,
+      "seeded_block": "t7",
+      "flagged": [
+        "t7"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 10,
+      "seeded_block": "t1",
+      "flagged": [
+        "m1",
+        "m3",
+        "t1"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 11,
+      "seeded_block": "t2",
+      "flagged": [
+        "m1",
+        "m3",
+        "t2"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 12,
+      "seeded_block": "t3",
+      "flagged": [
+        "m2",
+        "m3",
+        "t3"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 13,
+      "seeded_block": "t4",
+      "flagged": [
+        "m2",
+        "m3",
+        "t4"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 14,
+      "seeded_block": "m1",
+      "flagged": [
+        "m1",
+        "m3"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 15,
+      "seeded_block": "m2",
+      "flagged": [
+        "m2",
+        "m3"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 16,
+      "seeded_block": "t5",
+      "flagged": [
+        "m3",
+        "t5"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 17,
+      "seeded_block": "t6",
+      "flagged": [
+        "m3",
+        "t6"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 18,
+      "seeded_block": "m3",
+      "flagged": [
+        "m3"
+      ],
+      "correct": true
+    },
+    {
+      "trial": 19,
+      "seeded_block": "t7",
+      "flagged": [
+        "t7"
+      ],
+      "correct": true
+    }
+  ],
+  "control_records": [
+    {
+      "trial": 0,
+      "flagged": []
+    },
+    {
+      "trial": 1,
+      "flagged": []
+    },
+    {
+      "trial": 2,
+      "flagged": []
+    },
+    {
+      "trial": 3,
+      "flagged": []
+    },
+    {
+      "trial": 4,
+      "flagged": []
+    },
+    {
+      "trial": 5,
+      "flagged": []
+    },
+    {
+      "trial": 6,
+      "flagged": []
+    },
+    {
+      "trial": 7,
+      "flagged": []
+    },
+    {
+      "trial": 8,
+      "flagged": []
+    },
+    {
+      "trial": 9,
+      "flagged": []
+    },
+    {
+      "trial": 10,
+      "flagged": []
+    },
+    {
+      "trial": 11,
+      "flagged": []
+    },
+    {
+      "trial": 12,
+      "flagged": []
+    },
+    {
+      "trial": 13,
+      "flagged": []
+    },
+    {
+      "trial": 14,
+      "flagged": []
+    },
+    {
+      "trial": 15,
+      "flagged": []
+    },
+    {
+      "trial": 16,
+      "flagged": []
+    },
+    {
+      "trial": 17,
+      "flagged": []
+    },
+    {
+      "trial": 18,
+      "flagged": []
+    },
+    {
+      "trial": 19,
+      "flagged": []
+    }
+  ]
+}

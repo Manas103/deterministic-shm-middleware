@@ -1,0 +1,22 @@
+name: build-test-latency-gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(( $(nproc) / 2 > 0 ? $(nproc) / 2 : 1 ))"
+      - name: Unit tests
+        run: |
+          ./build/check_ring_buffer
+          ./build/check_sha256
+      - name: Latency-regression gate
+        run: |
+          python3 tools/ci_latency_gate.py --build-dir build --config configs/graph_12block.cfg

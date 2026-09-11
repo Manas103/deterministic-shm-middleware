@@ -1,0 +1,5 @@
+=== check_ring_buffer (Release) ===
+check_ring_buffer: 61576 checks passed
+
+=== check_sha256 (Release) ===
+check_sha256: 7 checks passed
