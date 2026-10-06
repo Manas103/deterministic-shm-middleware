@@ -50,6 +50,9 @@ target_link_libraries(graph_launcher PRIVATE shmmw_core rt)
 add_executable(monitor src/monitor.cpp)
 target_link_libraries(monitor PRIVATE shmmw_core rt)
 
+add_executable(snooper src/snooper.cpp)
+target_link_libraries(snooper PRIVATE shmmw_core rt)
+
 add_executable(sim_reference src/sim_reference.cpp)
 target_link_libraries(sim_reference PRIVATE shmmw_core)
 
@@ -58,6 +61,10 @@ enable_testing()
 add_executable(check_ring_buffer tests/test_ring_buffer.cpp)
 target_link_libraries(check_ring_buffer PRIVATE shmmw_core)
 add_test(NAME check_ring_buffer COMMAND check_ring_buffer)
+
+add_executable(check_snooper tests/test_snooper.cpp)
+target_link_libraries(check_snooper PRIVATE shmmw_core rt)
+add_test(NAME check_snooper COMMAND check_snooper)
 
 add_executable(check_sha256 tests/test_sha256.cpp)
 target_link_libraries(check_sha256 PRIVATE shmmw_core)

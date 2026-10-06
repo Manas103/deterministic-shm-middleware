@@ -2,10 +2,12 @@
 
 A statically configured compute graph of processes that talk only through
 POSIX shared memory, never a socket, with a record mode that captures a
-session and a replay mode that re-derives it from the recording. C++20,
-CMake, Python tooling, GitHub Actions. Every number below was measured on
-this machine, not targeted; where a measurement fell short of what the
-project set out to show, that is reported honestly rather than adjusted.
+session and a replay mode that re-derives it from the recording, plus a
+snooper that attaches to a live edge from a third process and reads it
+without ever being its consumer. C++20, CMake, Python tooling, GitHub
+Actions. Every number below was measured on this machine, not targeted;
+where a measurement fell short of what the project set out to show, that is
+reported honestly rather than adjusted.
 
 ## Why this exists
 
@@ -33,6 +35,13 @@ directly as design goals for exactly this kind of system.
 - **Synthetic traffic.** The 12-block graph's source emits a deterministic
   sine/cosine signal (`sin(tick*0.01)*100`, `cos(tick*0.017)*50`); there is
   no real sensor or market data anywhere in this repository.
+- **`snooper` is non-intrusive in two independent ways, not one.** It never
+  calls anything that advances the ring's `tail` (so it cannot consume a
+  message the real consumer was owed), and it attaches the segment
+  `PROT_READ`-only, so even a bug in it could not write into the ring; the
+  kernel enforces that, not a convention. `tests/test_snooper.cpp` proves
+  the second guarantee by forking a child that deliberately tries to write
+  through the mapping and asserting it dies of `SIGSEGV`.
 
 **Machine and toolchain.** WSL2 Ubuntu 22.04 on Windows 11, 12 logical
 cores and 12 GB RAM as capped by `.wslconfig` (the physical host has more;
@@ -62,6 +71,10 @@ include/shmmw/
   graph_config.hpp  The static topology type (blocks, edges, adjacency).
   clock.hpp         CLOCK_MONOTONIC helpers, including an absolute-deadline
                     sleep so a paced source does not drift over a long run.
+  snoop_ring.hpp    SnoopRing: a const-only view of an EdgeRing for `snooper`.
+                    No method ever writes `head` or `tail`; pairs with a
+                    PROT_READ-only mapping so there are two independent
+                    reasons it cannot touch producer or consumer state.
 src/
   graph_config.cpp  Parses the `<id> <name> <type> <in> <out>` config format.
   block_runner.cpp  The one executable every block in the graph runs. Which
@@ -74,6 +87,10 @@ src/
   monitor.cpp       A separate, read-only process that attaches to every
                     block's stats segment and prints a live table: msgs
                     in/out, drops, backpressure, last and EWMA hop latency.
+  snooper.cpp       A third process, neither the producer nor the real
+                    consumer, that attaches read-only to one edge's live
+                    message ring and prints head/tail/occupancy/drops plus
+                    the latest message, without ever being a consumer of it.
 configs/
   graph_12block.cfg The benchmark topology: source -> 4 parallel transforms
                     -> 2 merges -> 2 transforms -> 1 merge -> 1 transform ->
@@ -87,12 +104,20 @@ tools/
   ci_latency_gate.py     Establishes a baseline, seeds 20 per-block latency
                     regressions, and confirms the gate catches all of them
                     with zero false positives on clean control sessions.
+  snooper_noninterference.py  Runs N record/replay session pairs with
+                    `snooper` attached to a live edge throughout the record
+                    pass, and N without, comparing digest-match rate and
+                    hop latency between the two to show the snooper's
+                    presence does not change the session.
 tests/
   test_ring_buffer.cpp  Push/pop, drop-on-full, backpressure threshold,
                     wraparound, and a genuine two-thread producer/consumer
                     stress test (200,000 messages).
   test_sha256.cpp   FIPS 180-4 published test vectors, plus determinism,
                     avalanche, and incremental-vs-one-shot update checks.
+  test_snooper.cpp  Snoop reads match what the producer wrote; 1000 snoop
+                    reads consume nothing a real consumer was owed; a write
+                    through the read-only mapping faults with SIGSEGV.
 ```
 
 ### Design deep-dives
@@ -132,15 +157,31 @@ contention, so it is what actually discriminates "this block got slower"
 from "the machine got busy for a few milliseconds". See
 `tools/ci_latency_gate.py` for the full reasoning.
 
+**Why `snooper` gets a read-only mapping instead of just a read-only class.**
+`SnoopRing` (the class) never calls anything that writes `head` or `tail`,
+which would already be enough to make it non-intrusive in a codebase no one
+else can touch. But `monitor` and `snooper` both run as separate binaries
+from separate `main()`s, built from a shared library; a future change to
+either one is one `git diff` away from accidentally picking up a write path
+some other change needed. Mapping the segment `PROT_READ` turns "the class
+happens not to write" into "a write cannot compile its way around a bug
+reviewer's blind spot and still succeed at runtime", because the kernel, not
+a code reviewer, is the enforcement point. `tests/test_snooper.cpp` proves
+the mapping actually behaves this way rather than asserting it: it forks a
+child that deliberately writes through the mapping and checks the child
+died of `SIGSEGV`.
+
 ## Validation
 
 Unit tests (raw output in `docs/test_output.txt`):
 
 ```
 $ ./build/check_ring_buffer
-check_ring_buffer: 51961 checks passed
+check_ring_buffer: 55313 checks passed
 $ ./build/check_sha256
 check_sha256: 7 checks passed
+$ ./build/check_snooper
+check_snooper: 138 checks passed
 ```
 
 `check_sha256` diffs the hand-rolled SHA-256 implementation against the
@@ -150,6 +191,11 @@ known-correct implementation. `check_ring_buffer` includes a genuine
 two-thread producer/consumer stress test (200,000 pushes) that checks every
 successfully pushed message is eventually popped in order and every
 non-pushed message is accounted for in the drop counter exactly once.
+`check_snooper` checks that a snoop read sees exactly what a producer wrote,
+that 1000 snoop reads consume nothing a real consumer subsequently pops
+(the actual "does not touch producer state" claim, checked rather than
+asserted), and that a write through the read-only mapping faults with
+`SIGSEGV` in a forked child.
 
 Sanitizers, WSL2 g++ 11.4 (raw output in `docs/tsan_clean_run.txt`):
 
@@ -161,7 +207,12 @@ ThreadSanitizer (Debug, -fsanitize=thread, setarch -R for ASLR off): clean
 TSan only covers `check_ring_buffer`'s two-thread stress test; the
 multi-process shared-memory path (block_runner/graph_launcher/monitor) is
 inter-process, not inter-thread, so TSan's instrumentation does not apply to
-it the same way. AddressSanitizer+UBSan were run on both test binaries.
+it the same way. AddressSanitizer+UBSan were run on `check_ring_buffer`,
+`check_sha256` and `check_snooper`. `check_snooper` needs
+`ASAN_OPTIONS=handle_segv=0`: its SIGSEGV-on-write check deliberately
+triggers the fault ASan's own default signal handler would otherwise
+intercept and report as an ASan error rather than letting the parent see a
+normal signal exit; see `docs/tsan_clean_run.txt` for the full explanation.
 
 ## Findings
 
@@ -213,6 +264,25 @@ what the claim actually says (the gate caught the regression), not "the
 gate flags nothing else" (which a real backpressure cascade will never
 satisfy).
 
+**The first non-interference run "confirmed" the snooper saw live messages
+0 times out of 20, and the ring was not actually empty.** The first version
+of `snooper_noninterference.py` started the snoop process a third of the way
+into the session and gave it 3 snapshots at 50ms apart. Every one of 20
+sessions reported `occupancy=0`. The wrong first hypothesis was a bug in
+`SnoopRing` or in `attach_readonly`. The discriminating check was simpler:
+the existing hop-latency numbers already show interior blocks process a
+message in low microseconds when the machine is not contended, so a ring
+fed at 200 Hz (one message every 5ms) is empty almost all the time by
+construction, no matter how correct the snoop code is; 3 samples spaced
+50ms apart were simply unlikely to land in the handful-of-microseconds
+window where a message is actually in flight. The fix was not to the
+snooping code at all: polling every 2ms for the session's full duration
+instead of 3 widely spaced samples raised the catch rate to 15 of 20. The
+remaining 5 are not a bug either, they are sessions where the snoop
+genuinely never happened to sample during an occupied instant, which is the
+same honest limitation `monitor` already states for its own fixed-interval
+polling.
+
 ## Measured results
 
 Machine: WSL2 Ubuntu 22.04 on Windows 11, 12 logical cores / 12 GB RAM
@@ -257,6 +327,24 @@ What it does not measure: end-to-end latency from the source tick to the
 sink, which would be roughly the sum of every hop on the longest path and
 was deliberately not the claim here.
 
+**Snooper non-interference, 20 record/replay session pairs with `snooper`
+attached to edge `t1_m1` for the full record pass, 20 without, 400 ticks,
+200 Hz:** (`docs/snooper_noninterference_output.txt`)
+
+| | sessions | digest matches | mean hop p50 | mean hop p99 |
+|---|---|---|---|---|
+| baseline (no snooper) | 20 | 20/20 | 6,435 ns | 2,178,051 ns |
+| with snooper attached | 20 | 20/20 | 5,776 ns | 2,077,430 ns |
+
+**Record/replay determinism is unaffected: 20 of 20 either way.** The mean
+hop-latency columns differ by less than one noisy attempt differs from
+another in the table above (both machine-contention-dominated at p99 on
+this shared host); there is no direction in which the snooper's presence
+makes the graph slower. Across the 20 snooped sessions, `snooper` actually
+observed a non-empty ring and printed a live message 15 times; the other 5
+are the ring legitimately being empty at every sampled instant, not a
+failure to attach (see "Findings").
+
 ## Building and running
 
 ```bash
@@ -267,11 +355,13 @@ cmake --build build -j"$(( $(nproc)/2 ))"
 # Unit tests
 ./build/check_ring_buffer
 ./build/check_sha256
+./build/check_snooper
 
 # Sanitizers (separate build directories; TSan needs setarch -R under WSL2 for ASLR off)
 cmake -S . -B build_asan -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON
 cmake --build build_asan -j"$(( $(nproc)/2 ))"
 ./build_asan/check_ring_buffer && ./build_asan/check_sha256
+ASAN_OPTIONS=handle_segv=0 ./build_asan/check_snooper # see "Validation" for why
 
 cmake -S . -B build_tsan -DCMAKE_BUILD_TYPE=Debug -DENABLE_TSAN=ON
 cmake --build build_tsan --target check_ring_buffer -j"$(( $(nproc)/2 ))"
@@ -290,6 +380,13 @@ python3 tools/ci_latency_gate.py --build-dir build --config configs/graph_12bloc
 
 # Live diagnostics on a running or just-finished session
 ./build/monitor --config configs/graph_12block.cfg --run-id <run-id> --snapshots 5 --interval-ms 200
+
+# Snoop a live edge without being its consumer (run while a session is in flight)
+./build/snooper --run-id <run-id> --edge t1_m1 --snapshots 400 --interval-ms 2
+
+# Snooper non-interference (20 sessions with snooper attached, 20 without)
+python3 tools/snooper_noninterference.py --build-dir build --config configs/graph_12block.cfg \
+  --edge t1_m1 --sessions 20 --ticks 400 --rate-hz 200
 ```
 
 ## Sibling comparison
@@ -326,3 +423,13 @@ test vectors) because it is the right tool for either problem.
 - `monitor` polls at a fixed interval rather than blocking on a change
   notification; for a live operator tool this is a reasonable tradeoff, and
   it is stated here rather than left implicit.
+- `snooper` is also fixed-interval polling, not a blocking tap, so it can
+  and does miss messages that arrive and are consumed between two polls (in
+  the non-interference measurement it caught a live message in 15 of 20
+  sessions, not 20 of 20; see "Findings" and "Measured results"). It has no
+  seqlock-style retry against a torn read of a slot the producer is
+  mid-write to; at the polling rates it actually runs at this was never
+  observed in testing, but it is a real theoretical gap this repo's own
+  market-data seqlock (in the sibling `lock-free-order-matching-engine`)
+  exists specifically to close, and this snooper does not import that
+  machinery.

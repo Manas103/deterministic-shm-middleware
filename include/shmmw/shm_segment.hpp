@@ -48,7 +48,7 @@ public:
             std::fprintf(stderr, "ftruncate failed for %s: %s\n", name.c_str(), std::strerror(errno));
             std::exit(1);
         }
-        s.map_(fd, size, name, true);
+        s.map_(fd, size, name, true, PROT_READ | PROT_WRITE);
         return s;
     }
 
@@ -70,7 +70,28 @@ public:
             std::fprintf(stderr, "shm_open(attach) failed for %s: %s\n", name.c_str(), std::strerror(errno));
             std::exit(1);
         }
-        s.map_(fd, size, name, false);
+        s.map_(fd, size, name, false, PROT_READ | PROT_WRITE);
+        return s;
+    }
+
+    // Attaches with PROT_READ only: the mapping itself cannot be written to,
+    // so "does not touch producer state" is enforced by the kernel's page
+    // protection, not by convention. Used by `snooper`, which has no business
+    // reason to ever hold a writable mapping to a ring it does not own. See
+    // tests/test_snooper.cpp for a test that proves a write through this
+    // mapping faults.
+    static ShmSegment attach_readonly(const std::string& name, size_t size) {
+        ShmSegment s;
+        int fd = -1;
+        for (int attempt = 0; attempt < 200 && fd < 0; ++attempt) {
+            fd = shm_open(name.c_str(), O_RDONLY, 0600);
+            if (fd < 0) usleep(1000);
+        }
+        if (fd < 0) {
+            std::fprintf(stderr, "shm_open(attach_readonly) failed for %s: %s\n", name.c_str(), std::strerror(errno));
+            std::exit(1);
+        }
+        s.map_(fd, size, name, false, PROT_READ);
         return s;
     }
 
@@ -78,8 +99,8 @@ public:
     size_t size() const { return size_; }
 
 private:
-    void map_(int fd, size_t size, const std::string& name, bool owner) {
-        void* addr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void map_(int fd, size_t size, const std::string& name, bool owner, int prot) {
+        void* addr = mmap(nullptr, size, prot, MAP_SHARED, fd, 0);
         ::close(fd);
         if (addr == MAP_FAILED) {
             std::fprintf(stderr, "mmap failed for %s: %s\n", name.c_str(), std::strerror(errno));

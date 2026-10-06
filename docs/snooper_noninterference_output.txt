@@ -1,0 +1,15 @@
+{
+  "baseline": {
+    "sessions": 20,
+    "digest_matches": 20,
+    "mean_p50_ns": 6435.3,
+    "mean_p99_ns": 2178051.1
+  },
+  "with_snooper": {
+    "sessions": 20,
+    "digest_matches": 20,
+    "mean_p50_ns": 5776.4,
+    "mean_p99_ns": 2077429.65
+  },
+  "snooper_confirmed_live_messages": "15/20"
+}

@@ -1,8 +1,20 @@
 === AddressSanitizer + UBSan, Debug build (ENABLE_ASAN=ON) ===
 --- check_ring_buffer ---
-check_ring_buffer: 119361 checks passed
+check_ring_buffer: 131067 checks passed
 --- check_sha256 ---
 check_sha256: 7 checks passed
+--- check_snooper (ASAN_OPTIONS=handle_segv=0) ---
+check_snooper: 138 checks passed
+
+Note on check_snooper under ASan: one of its three checks deliberately
+triggers a SIGSEGV (test_readonly_mapping_faults_on_write, proving a
+PROT_READ mapping cannot be written to) and asserts on the signal via
+waitpid/WIFSIGNALED/WTERMSIG. ASan's default signal handler intercepts that
+SIGSEGV itself and reports it as an AddressSanitizer error before the parent
+ever sees a normal signal exit, which fails the test for a reason that has
+nothing to do with a real bug. Running with ASAN_OPTIONS=handle_segv=0 lets
+the intentional SIGSEGV propagate normally; every other check in the suite
+is unaffected by that option.
 
 === ThreadSanitizer, Debug build (ENABLE_TSAN=ON), setarch -R (ASLR off) ===
-check_ring_buffer: 120604 checks passed
+check_ring_buffer: 126731 checks passed
