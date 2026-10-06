@@ -11,16 +11,11 @@
 #include <vector>
 
 #include "shmmw/graph_config.hpp"
+#include "shmmw/shm_names.hpp"
 #include "shmmw/shm_segment.hpp"
 #include "shmmw/stats.hpp"
 
 using namespace shmmw;
-
-namespace {
-std::string shm_stats_name(const std::string& run_id, const std::string& block) {
-    return "/shmmw_" + run_id + "_s_" + block;
-}
-} // namespace
 
 int main(int argc, char** argv) {
     std::string config_path, run_id;

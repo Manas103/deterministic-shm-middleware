@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <sstream>
 
 namespace shmmw {
@@ -45,8 +46,8 @@ GraphConfig load_graph_config(const std::string& path) {
     while (std::getline(f, line)) {
         if (line.empty() || line[0] == '#') continue;
         std::stringstream ss(line);
-        std::string id_str, name, type_str, in_str, out_str;
-        ss >> id_str >> name >> type_str >> in_str >> out_str;
+        std::string id_str, name, type_str, in_str, out_str, kernel_str;
+        ss >> id_str >> name >> type_str >> in_str >> out_str >> kernel_str;
         if (name.empty()) continue;
 
         BlockConfig b;
@@ -55,9 +56,24 @@ GraphConfig load_graph_config(const std::string& path) {
         b.type = parse_type(type_str);
         for (auto& e : split_csv(in_str)) { edge_id_for(e); b.input_edges.push_back(e); }
         for (auto& e : split_csv(out_str)) { edge_id_for(e); b.output_edges.push_back(e); }
+        b.kernel = (kernel_str == "-") ? std::string() : kernel_str;
         g.blocks.push_back(b);
     }
     return g;
+}
+
+bool is_topologically_ordered(const GraphConfig& g, std::string* why) {
+    std::set<std::string> produced;
+    for (const auto& b : g.blocks) {
+        for (const auto& e : b.input_edges) {
+            if (!produced.count(e)) {
+                if (why) *why = "block " + b.name + " reads edge " + e + " before any earlier block writes it";
+                return false;
+            }
+        }
+        for (const auto& e : b.output_edges) produced.insert(e);
+    }
+    return true;
 }
 
 } // namespace shmmw

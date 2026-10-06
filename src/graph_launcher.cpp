@@ -1,8 +1,15 @@
 // graph_launcher: the only process that creates shared memory. It reads the
-// static graph config, creates one ring-buffer segment per edge and one
-// stats segment per block, forks and execs one block_runner process per
-// block, waits for all of them, then aggregates every block's message log
-// into a single SHA-256 session digest and prints a JSON summary to stdout.
+// static graph config, creates one stats segment per block and the start
+// barrier, plus (shm transport only) one ring-buffer segment per edge, then
+// forks and execs one block process per block, waits for all of them, and
+// aggregates every block's message log into a single SHA-256 session digest
+// printed as a JSON line on stdout.
+//
+// --transport shm   (default) execs block_runner; edges are shm rings.
+// --transport ros2  execs ros2_block_node; edges are ROS 2 topics. The stats
+//                   segments and start barrier are still shared memory (they
+//                   are session control and live introspection, not the data
+//                   path), so `monitor` works unchanged against either.
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -18,7 +25,8 @@
 
 #include "shmmw/graph_config.hpp"
 #include "shmmw/ring_buffer.hpp"
-#include "shmmw/sha256.hpp"
+#include "shmmw/session_log.hpp"
+#include "shmmw/shm_names.hpp"
 #include "shmmw/shm_segment.hpp"
 #include "shmmw/stats.hpp"
 
@@ -39,6 +47,9 @@ struct Options {
     std::string block_runner_path = "./block_runner";
     std::string regress_block;    // name of the one block to slow down, for the CI latency-regression harness
     int64_t regress_delay_ns = 0; // how much, applied only to regress_block
+    std::string transport = "shm";
+    std::string scenario_path;
+    std::string idle_timeout_ms;
 };
 
 Options parse(int argc, char** argv) {
@@ -58,18 +69,11 @@ Options parse(int argc, char** argv) {
         else if (k == "--block-runner") o.block_runner_path = next();
         else if (k == "--regress-block") o.regress_block = next();
         else if (k == "--regress-delay-ns") o.regress_delay_ns = std::stoll(next());
+        else if (k == "--transport") o.transport = next();
+        else if (k == "--scenario") o.scenario_path = next();
+        else if (k == "--idle-timeout-ms") o.idle_timeout_ms = next();
     }
     return o;
-}
-
-std::string shm_edge_name(const std::string& run_id, const std::string& edge) {
-    return "/shmmw_" + run_id + "_e_" + edge;
-}
-std::string shm_stats_name(const std::string& run_id, const std::string& block) {
-    return "/shmmw_" + run_id + "_s_" + block;
-}
-std::string shm_barrier_name(const std::string& run_id) {
-    return "/shmmw_" + run_id + "_barrier";
 }
 
 std::map<std::string, uint32_t> parse_small_edges(const std::string& s) {
@@ -91,16 +95,22 @@ std::string read_file(const std::string& path) {
 
 int main(int argc, char** argv) {
     Options o = parse(argc, argv);
+    if (o.transport != "shm" && o.transport != "ros2") {
+        std::fprintf(stderr, "unknown --transport %s (shm|ros2)\n", o.transport.c_str());
+        return 1;
+    }
     GraphConfig g = load_graph_config(o.config_path);
     auto small = parse_small_edges(o.small_edges);
 
-    // 1. Create every edge and stats segment before any block process exists.
+    // 1. Create every segment before any block process exists.
     std::vector<ShmSegment> edge_segs, stats_segs;
-    for (auto& e : g.edges) {
-        uint32_t cap = small.count(e.name) ? small[e.name] : kDefaultEdgeCapacity;
-        ShmSegment seg = ShmSegment::create(shm_edge_name(o.run_id, e.name), EdgeRing::size_for(cap));
-        EdgeRing::init(seg.data(), cap);
-        edge_segs.push_back(std::move(seg));
+    if (o.transport == "shm") {
+        for (auto& e : g.edges) {
+            uint32_t cap = small.count(e.name) ? small[e.name] : kDefaultEdgeCapacity;
+            ShmSegment seg = ShmSegment::create(shm_edge_name(o.run_id, e.name), EdgeRing::size_for(cap));
+            EdgeRing::init(seg.data(), cap);
+            edge_segs.push_back(std::move(seg));
+        }
     }
     for (auto& b : g.blocks) {
         ShmSegment seg = ShmSegment::create(shm_stats_name(o.run_id, b.name), sizeof(BlockStats));
@@ -110,7 +120,7 @@ int main(int argc, char** argv) {
     ShmSegment barrier_seg = ShmSegment::create(shm_barrier_name(o.run_id), sizeof(StartBarrier));
     new (barrier_seg.data()) StartBarrier();
 
-    // 2. Fork+exec one block_runner per block.
+    // 2. Fork+exec one block process per block.
     std::vector<pid_t> pids;
     std::vector<std::string> log_paths;
     for (auto& b : g.blocks) {
@@ -135,6 +145,8 @@ int main(int argc, char** argv) {
                 args.push_back("--mode"); args.push_back(o.mode);
                 args.push_back("--trace"); args.push_back(o.trace_path);
             }
+            if (!o.scenario_path.empty()) { args.push_back("--scenario"); args.push_back(o.scenario_path); }
+            if (!o.idle_timeout_ms.empty()) { args.push_back("--idle-timeout-ms"); args.push_back(o.idle_timeout_ms); }
             if (!o.small_edges.empty()) { args.push_back("--edge-cap-small"); args.push_back(o.small_edges); }
             if (!o.regress_block.empty() && b.name == o.regress_block) {
                 args.push_back("--inject-delay-ns"); args.push_back(std::to_string(o.regress_delay_ns));
@@ -158,17 +170,17 @@ int main(int argc, char** argv) {
         if (status != 0) worst_status = status;
     }
 
-    // 4. Aggregate: hash each block's own log, then hash the concatenation
-    // of those hex digests in a fixed (block id) order, so the final digest
-    // does not depend on which order the child processes happened to exit.
-    std::ostringstream combined;
+    // 4. Aggregate in fixed (config) order, so the digest does not depend on
+    // which order the child processes happened to exit.
+    std::vector<std::string> names, logs;
     for (size_t i = 0; i < g.blocks.size(); ++i) {
-        std::string content = read_file(log_paths[i]);
-        combined << g.blocks[i].name << ':' << Sha256::hash_string(content) << ';';
+        names.push_back(g.blocks[i].name);
+        logs.push_back(read_file(log_paths[i]));
     }
-    std::string session_digest = Sha256::hash_string(combined.str());
+    const std::string digest = session_digest(names, logs);
 
-    std::cout << "{\"run_id\":\"" << o.run_id << "\",\"session_digest\":\"" << session_digest
+    std::cout << "{\"run_id\":\"" << o.run_id << "\",\"transport\":\"" << o.transport
+              << "\",\"session_digest\":\"" << digest
               << "\",\"exit_ok\":" << (worst_status == 0 ? "true" : "false") << "}\n";
 
     return worst_status == 0 ? 0 : 1;

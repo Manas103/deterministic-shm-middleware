@@ -1,0 +1,23 @@
+# Urban crossing. The ego approaches an intersection at 12 m/s, brakes for a
+# pedestrian (a1) crossing its lane, then turns left while cross traffic
+# (a2) passes and a parked car (a3) sits at the curb.
+# Format: see include/shmmw/scenario.hpp or the README "Scenario format".
+name      urban_crossing
+dt        0.01
+seed      7
+wheelbase 2.7
+max_steer 0.6
+ego_init  0 0 0 12
+sensor    0.08 0.004 60
+
+cmd 0.0   0.0  0.0
+cmd 1.0  -3.5  0.0     # pedestrian ahead: brake hard
+cmd 2.5   0.0  0.0
+cmd 3.5   1.5  0.18    # pedestrian clear: accelerate into a left turn
+
+agent a1 0.0  28.0 -6.0
+agent a1 1.2  28.0 -2.4
+agent a1 4.0  28.0  6.0      # pedestrian, 3 m/s across the ego lane
+agent a2 0.0  45.0 -40.0
+agent a2 6.0  45.0  40.0     # cross traffic, about 13 m/s
+agent a3 0.0  20.0  -3.5     # parked car, a single waypoint holds forever

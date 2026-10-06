@@ -11,7 +11,11 @@ struct BlockConfig {
     std::string name;
     BlockType type = BlockType::Transform;
     std::vector<std::string> input_edges;  // edge names, size 0/1/2
-    std::vector<std::string> output_edges; // edge names, size 0/1
+    std::vector<std::string> output_edges; // edge names, size 0..N
+    // Which compute kernel this block runs (see kernels.hpp). Empty means the
+    // generic kernel for the block type (sine source, linear transform, sum
+    // merge), which is what the original 12-block benchmark graph uses.
+    std::string kernel;
 };
 
 struct EdgeConfig {
@@ -38,7 +42,15 @@ struct GraphConfig {
 // topology is fixed text on disk before any process exists, never a runtime
 // registration call, so there is no way to add a node while the system runs.
 // Format, one block per non-comment line:
-//   <id> <name> <source|transform|merge|sink> <in1,in2|-> <out1|->
+//   <id> <name> <source|transform|merge|sink> <in1,in2|-> <out1,...|-> [kernel]
+// The optional sixth column names a kernel from kernels.hpp (for example
+// `ego_bicycle` or `sensor:a1`); omitted or `-` selects the generic kernel.
 GraphConfig load_graph_config(const std::string& path);
+
+// True when every block's inputs are produced by a block that appears
+// earlier in the file. The sequential reference oracle relies on this, and
+// both shipped configs satisfy it; a config that does not is rejected by the
+// oracle rather than silently evaluated in the wrong order.
+bool is_topologically_ordered(const GraphConfig& g, std::string* why = nullptr);
 
 } // namespace shmmw

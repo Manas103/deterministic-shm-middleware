@@ -1,0 +1,27 @@
+# Highway cut-in. The ego cruises at 25 m/s behind a slower lead vehicle
+# (a1); a faster car in the left lane (a2) cuts in between them; an oncoming
+# car on the far side (a3) starts outside sensor range and enters it.
+# Format: see include/shmmw/scenario.hpp or the README "Scenario format".
+name      highway_cut_in
+dt        0.01
+seed      20261002
+wheelbase 2.9
+max_steer 0.5
+ego_init  0 0 0 25
+sensor    0.05 0.002 120
+
+# t_start accel steer
+cmd 0.0   0.0  0.0
+cmd 1.5  -2.5  0.0     # cut-in begins: brake
+cmd 3.0   0.0  0.004   # settle, slight drift left
+cmd 4.5   0.8  0.0     # gap reopens: accelerate
+
+# agent name t x y
+agent a1 0.0   40.0  0.0
+agent a1 6.0  160.0  0.0     # lead, 20 m/s
+agent a2 0.0   10.0  3.7
+agent a2 1.5   51.0  3.7     # left lane, about 27 m/s
+agent a2 3.0   88.0  0.3     # merges into the ego lane
+agent a2 6.0  150.0  0.0
+agent a3 0.0  300.0  7.4
+agent a3 6.0  120.0  7.4     # oncoming, 30 m/s, enters 120 m range late
