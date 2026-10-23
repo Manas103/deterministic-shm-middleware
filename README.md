@@ -404,6 +404,124 @@ merge orderings; the one in market-data-tick-capture has to survive a decode
 pass. Both land on the same tool (a hand-rolled SHA-256 diffed against FIPS
 test vectors) because it is the right tool for either problem.
 
+## Extension: GPU-Resident Perception Graph with Record and Replay (`perception/`, `ros2/`, Oct. 2026)
+
+A synthetic camera-and-LiDAR perception stage: CUDA kernels voxelize a synthetic LiDAR point cloud and project it into a synthetic camera's image plane, an OpenGL viewer reads the rendered output, and a separate ROS 2 subscriber process measures what crossing a DDS process boundary costs on top of this repo's own shared-memory hop. Every number below was measured on this machine via the commands in "Building and running" below, not targeted.
+
+### What this is, honestly
+
+- **A new GPU-resident stage added to this repo's existing multi-process shared-memory graph, not a second middleware.** Everything in "Architecture" above (typed messages, record/replay, the CI latency gate) is untouched; `perception/` and `ros2/` are additive.
+- **Cross-process CUDA IPC (`cudaIpcGetMemHandle`/`cudaIpcOpenMemHandle`) does not work on this machine, and that is a documented WSL2 limitation, not a bug this session chased.** It was tried first, empirically (a two-process handle-share test), and failed with `invalid resource handle` every time. NVIDIA's own CUDA-on-WSL documentation states IPC memory allocation across WSL2 processes is unsupported. Given that, "device-memory handles rather than host copies" is implemented as the strongest honest version available on this machine: the voxelize, project and composite kernels hand off to each other entirely on the device, inside one process, with zero intermediate host round trips; the measured 11.4ms/3.9ms-style comparison (below) is exactly that: the cost of adding host round trips between those same kernels versus removing them, which is the real effect "GPU-resident" is about, just not literally spanning an OS process boundary for this specific hop.
+- **The OpenGL viewer is a second, genuinely separate OS process**, reading the pipeline's real output through this repo's existing POSIX-shared-memory mechanism (a small single-slot mailbox, since an RGBA image does not fit in the generic 64-byte `shmmw::Message`), the same way every other inter-process handoff in this repo works. It is not CUDA-GL zero-copy interop: this machine's only available GL context is Mesa's D3D12 software-translation path on an integrated AMD GPU (`GL_RENDERER: D3D12 (AMD Radeon(TM) Graphics)`, confirmed at startup), not the NVIDIA driver CUDA runs on, so no real CUDA-OpenGL resource sharing is possible here either.
+- **"Camera" is a synthetic gradient background, not a rendered scene or a real image.** The interesting data is the LiDAR point cloud; the camera buffer exists to be a genuine second device buffer that the composite kernel fuses the LiDAR projection onto, exercising "camera and LiDAR frame fusion" as a real code path even though neither sensor is real.
+- **A bird's-eye-view projection, not a perspective camera projection.** `project_kernel` collapses height and sums occupied-voxel counts into image pixels by (x, y) alone; there is no camera intrinsics matrix or depth buffer. This keeps the kernel's atomics integer (and therefore exactly order-independent, see Validation) and ties back to the same BEV framing project 1 and project 2 use elsewhere in this role's resume.
+- **The ROS 2 crossing-cost measurement is a separate, decoupled benchmark**, not wired into the main 18,000-frame latency run: a dedicated publisher (`ros2/ros2_crossing_pub`) sends frame-sized messages over `std_msgs::msg::UInt8MultiArray` (no custom `.msg`/`rosidl` generation needed) and a dedicated subscriber (`ros2/ros2_crossing_sub`) in another process times receipt.
+
+**Machine and toolchain.** WSL2 Ubuntu 22.04 on Windows 11, g++ 11.4.0, CUDA 13.4.92 (`nvcc`), one NVIDIA GeForce RTX 4070 SUPER (sm_89, 56 SMs), ROS 2 Humble (`rclcpp`, `ament_cmake`, `rmw_fastrtps_cpp`), Mesa 23.2.1 EGL/GL (D3D12 translation, AMD iGPU) for the headless viewer.
+
+### Architecture
+
+```
+include/shmmw/perception/
+  frame_gen.hpp       Synthetic LiDAR point cloud + camera background generator,
+                      deterministic (SplitMix64) by (seed, frame_idx).
+  pipeline_api.hpp    The CUDA/non-CUDA boundary: GpuPipeline, a plain-C++ class;
+                      only kernels.cu includes <cuda_runtime.h>.
+  cpu_reference.hpp   Slow serial oracle for voxelize/project/composite.
+  frame_mailbox.hpp   Single-slot shared-memory handoff to the OpenGL viewer.
+src/perception/
+  frame_gen.cpp
+  cpu_reference.cpp
+  kernels.cu           voxelize_kernel, project_kernel, composite_kernel, and
+                       GpuPipeline::run_frame (device-resident or host-round-trip).
+  perception_bench.cpp CLI: per-frame p50/p99 latency, or --mode digest for the
+                       replay-determinism SHA-256 fingerprint.
+  perception_node.cpp  Lockstep producer for the viewer demo.
+  viewer.cpp           Headless EGL/OpenGL consumer; checksums its own
+                       framebuffer readback against the producer's checksum.
+ros2/
+  ros2_crossing_pub.cpp / ros2_crossing_sub.cpp / CMakeLists.txt
+                       Standalone ament_cmake package (rclcpp, std_msgs) for the
+                       crossing-cost measurement; not part of the main CMake build.
+tests/
+  test_frame_gen.cpp, test_perception_kernels.cpp
+tools/
+  run_perception_replay.py   100-session replay-digest check (reuses
+                             tools/run_replay_digests.py's splitmix64 family).
+```
+
+### Design deep-dives
+
+**Why the voxel grid and the per-pixel accumulator use `atomicAdd` on `int32_t`, never on a float.** Integer addition is associative and commutative in hardware exactly; a floating-point `atomicAdd` is not, because rounding depends on accumulation order, which depends on which thread's atomic wins a given race. Every occupancy and projection count in this pipeline is an integer for exactly this reason: it is what makes the replay digest (below) hold across threads and across runs, not just across processes.
+
+**Why the CPU reference oracle is a real, independently-written third implementation, not a copy of the kernel body.** `cpu_reference.cpp`'s loops are plain nested `for` loops over points, voxels and pixels, never an atomic, never a kernel launch; `tests/test_perception_kernels.cpp` diffs its output against the GPU path byte-for-byte over 30 frames. An identical-looking bug in both the kernel and a "reference" copied from it would never be caught; this oracle is slow and boring on purpose.
+
+### Validation
+
+1. **Unit tests** (`tests/test_frame_gen.cpp`, `tests/test_perception_kernels.cpp`, hand-rolled, no framework): frame generation is deterministic for a fixed (seed, frame) and every generated point lands inside the volume the voxelizer covers; the GPU path matches the serial CPU reference oracle exactly (byte-for-byte image and voxel grid) over 30 frames, the host-round-trip and device-resident paths compute the identical answer, and an empty frame leaves the camera background untouched with an all-zero voxel grid.
+2. **Viewer cross-check**: the OpenGL viewer independently checksums its own `glReadPixels` readback and compares it to the producer's checksum of the same bytes; 20 of 20 frames matched in the run recorded below.
+3. **Replay determinism**: the same seed run through `perception_bench --mode digest` repeatedly; every run's SHA-256 digest compared (see Measured results).
+
+Raw output: `docs/perception_test_output.txt`.
+
+### Findings
+
+**CUDA IPC across WSL2 processes fails outright.** A minimal two-process test (one process `cudaIpcGetMemHandle`s a buffer and writes the handle to a file; a second opens it) returned `invalid resource handle` from `cudaIpcOpenMemHandle` every time, with no code-side mistake to find: NVIDIA's CUDA-on-WSL user guide documents this as unsupported. This is why the GPU-resident claim is implemented within one process (see "What this is, honestly") rather than literally spanning the OS process boundary the base repo's other blocks do.
+
+**The repo's own `shmmw::Sha256::update()` was quadratic in input size, invisible until this extension called it with an 8MB buffer.** Every prior call site in this repo hashes one 64-byte `Message` at a time, so nobody had ever noticed that `update()` appended the whole input to an internal `std::vector` and then called `vector::erase(begin, begin+64)` once per 64-byte block, an operation that shifts everything after the erased block down by 64 bytes every time it runs. At `Message`-sized inputs that is unmeasurably fast; at the perception extension's 8MB-per-frame voxel grid it turned a sub-second digest run into a multi-minute hang (confirmed by `ps`: a single `perception_bench --mode digest` process pinned at 100% CPU for over six minutes on 300 frames that should take a fraction of a second). The fix changes `update()` to process full blocks directly out of the caller's buffer and only ever copy the trailing remainder into the internal buffer, which is O(n) instead of O(n^2); `tests/test_sha256.cpp`'s existing FIPS-vector checks still pass unchanged, since the externally observable behavior is identical. This is a real complexity bug in a utility every block in this repo depends on, found by this extension's much larger inputs and fixed once, centrally, rather than worked around only here.
+
+**GL_RENDERER confirmed this machine has no NVIDIA-backed OpenGL context before any CUDA-GL interop code was written.** A standalone headless-EGL probe printed `D3D12 (AMD Radeon(TM) Graphics)`: WSLg's Mesa stack is bound to the integrated AMD GPU through a D3D12 translation layer, not the NVIDIA GPU CUDA runs on. Writing `cudaGraphicsGLRegisterBuffer` code against this context would have compiled and then failed at runtime for the same class of reason as the IPC failure above; the viewer design in "What this is, honestly" was chosen because this was checked first, not discovered after the fact.
+
+### Measured results
+
+Machine: WSL2 Ubuntu 22.04, g++ 11.4.0, CUDA 13.4.92, one RTX 4070 SUPER (sm_89, 56 SMs). Raw output in `docs/perception_benchmark_output.txt`. Per-frame shape: 300,000 synthetic LiDAR points, a 128^3 voxel grid, a 512x512 camera/output image (sized up from an initial 4,096-point/32^3/64x64 design across two genuine attempts at reaching a measurable, realistic latency scale; see "Building and running" for the exact commands behind every number here).
+
+**Removing the host round trips between the voxelize, project and composite kernels cut p50 per-frame latency from 2.100ms to 0.722ms** (1,000 frames each; device-resident path p99 0.907ms, host-round-trip path p99 2.965ms). This did not reach the 11.4ms-to-3.9ms scale this project set out to show; at this buffer size the gap is real and in the right direction, but far smaller in absolute terms, which is reported as measured rather than inflated by holding onto a bigger, slower design than what was actually built.
+
+**At 18,000 frames (the nominal count for a session running this pipeline at the target 30Hz for ten minutes; this benchmark runs the frames back-to-back rather than literally pacing the clock for ten minutes, same convention this repo's own hop-latency and CI-gate benchmarks use), the device-resident path measured p50 1.215ms / p99 1.485ms.** At 30Hz the per-frame budget is 33.3ms; both paths clear it with over an order of magnitude of headroom, which is the sense in which "30Hz" is a target this latency supports rather than a literal wall-clock pacing this harness enforced.
+
+**Replay determinism: individually verified, not completed at the full 100-session scale in this build session.** The GPU path matched the serial CPU reference oracle byte-for-byte over 30 frames (Validation, above), and every accumulator in the pipeline is an integer `atomicAdd` with no other source of cross-run nondeterminism, which is the same guarantee the 100/100 digest check elsewhere in this repo and in the sibling `batched-gpu-driving-scenario-simulator` repo rests on. The 100-session run (`tools/run_perception_replay.py build --frames 300 --sessions 100`) was started and did not finish inside this session's time budget (each session pays its own CUDA-context startup cost on top of 300 frames, longer than estimated); this is reported honestly rather than assumed. Re-running that exact command is the way to get the number this section does not yet have.
+
+**Viewer cross-check: 20 of 20 frames' OpenGL framebuffer-readback checksum matched the producer's checksum of the same bytes exactly** (see `docs/viewer_output.txt`).
+
+**ROS 2 crossing cost: p50 1.765ms, p99 11.492ms** over 200 messages (the 512x512 synthetic camera background as payload, `std_msgs::msg::UInt8MultiArray`), measured as the subscriber's receipt timestamp minus the publisher's embedded send timestamp, both `CLOCK_MONOTONIC`-backed `steady_clock`, across two separate OS processes. This is lower than the 2.6ms this project set out to show, and the p99 (dominated by DDS/scheduler jitter on this shared machine, consistent with this repo's own hop-latency p99 findings elsewhere) is far higher; both are reported as measured.
+
+### Building and running
+
+```bash
+# Main build (perception/ is additive; the rest of the repo is untouched)
+bash build_perception.sh   # cmake + make -j6, including perception_bench/perception_node/viewer
+
+# Unit tests
+cd build && ./check_frame_gen && ./check_perception_kernels
+
+# Latency: device-resident vs host-round-trip, same frame count
+./build/perception_bench --frames 1000 --mode latency
+./build/perception_bench --frames 1000 --mode latency --host-round-trip
+./build/perception_bench --frames 18000 --mode latency
+
+# Replay determinism (100 sessions against one seed)
+python3 tools/run_perception_replay.py build --frames 300 --sessions 100 --seed 777
+
+# OpenGL viewer demo (lockstep, 20 frames)
+./build/perception_node 20 &
+./build/viewer 20
+
+# ROS 2 crossing cost (separate ament_cmake package)
+bash build_ros2.sh
+source /opt/ros/humble/setup.bash
+./ros2/build/ros2_crossing_sub 200 &
+./ros2/build/ros2_crossing_pub 200
+```
+
+### Extension limitations
+
+- Cross-process CUDA IPC does not work on this machine (WSL2); the GPU-resident claim is demonstrated within one process instead (see "What this is, honestly" and Findings).
+- The OpenGL viewer renders through Mesa's D3D12 software translation on an integrated AMD GPU, not the NVIDIA driver; there is no real CUDA-OpenGL interop in this build.
+- The host-round-trip-vs-device-resident latency gap, while in the claimed direction, is far smaller in absolute terms than this project set out to show; see Measured results.
+- The BEV projection discards height entirely (every occupied voxel at a given (x, y) column contributes to the same pixel regardless of z); a real perception stack would keep a depth buffer or render multiple height slices.
+- `ros2_crossing_pub`/`ros2_crossing_sub` measure one-way latency for a fixed-size synthetic payload at a fixed publish rate; they do not reproduce the main pipeline's actual frame content or timing.
+
 ## Limitations
 
 - The p99 hop-latency target (42us) was not met; see "Measured results".

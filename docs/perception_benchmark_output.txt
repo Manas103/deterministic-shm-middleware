@@ -1,0 +1,15 @@
+$ ./perception_bench --frames 1000 --mode latency
+device: NVIDIA GeForce RTX 4070 SUPER (sm_89), 56 SMs
+mode=latency host_round_trip=0 frames=1000 p50_ms=0.7226 p99_ms=0.9071
+
+$ ./perception_bench --frames 1000 --mode latency --host-round-trip
+device: NVIDIA GeForce RTX 4070 SUPER (sm_89), 56 SMs
+mode=latency host_round_trip=1 frames=1000 p50_ms=2.1000 p99_ms=2.9647
+
+$ ./perception_bench --frames 18000 --mode latency
+device: NVIDIA GeForce RTX 4070 SUPER (sm_89), 56 SMs
+mode=latency host_round_trip=0 frames=18000 p50_ms=1.2147 p99_ms=1.4848
+
+$ ./perception_bench --frames 18000 --mode latency --host-round-trip
+device: NVIDIA GeForce RTX 4070 SUPER (sm_89), 56 SMs
+mode=latency host_round_trip=1 frames=18000 p50_ms=2.2829 p99_ms=4.6529

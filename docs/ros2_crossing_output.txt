@@ -1,0 +1,4 @@
+$ ./ros2/build/ros2_crossing_sub 200 &
+$ ./ros2/build/ros2_crossing_pub 200
+received=200 first_ms=14.466 p50_ms=1.765 p99_ms=11.492
+published 200 frames

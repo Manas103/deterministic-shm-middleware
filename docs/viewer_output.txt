@@ -1,0 +1,7 @@
+$ ./perception_node 20 &
+$ ./viewer 20
+GL_RENDERER: D3D12 (AMD Radeon(TM) Graphics)
+frame 0: producer_checksum=16876390669252369752 viewer_checksum=16876390669252369752 MATCH
+... (frames 1-18 omitted, all MATCH) ...
+frame 19: producer_checksum=18188734500075036938 viewer_checksum=18188734500075036938 MATCH
+viewer: 20 of 20 frames matched the producer's checksum

@@ -83,3 +83,46 @@ add_executable(check_engine tests/test_engine.cpp)
 target_link_libraries(check_engine PRIVATE shmmw_core)
 target_compile_definitions(check_engine PRIVATE SHMMW_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME check_engine COMMAND check_engine)
+
+# GPU-resident perception extension (voxelize/project/composite CUDA
+# kernels, the OpenGL viewer, the host-round-trip-vs-device-resident
+# latency benchmark). Conditional on CUDA so the rest of this repo keeps
+# building on a machine without a GPU, which it always did before this
+# extension existed.
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+  enable_language(CUDA)
+  set(CMAKE_CUDA_STANDARD 17)
+  # Real SASS for sm_89 only, no embedded PTX: see the sibling
+  # batched-gpu-driving-scenario-simulator repo's README Findings for why
+  # (this machine's driver cannot JIT-compile this nvcc's PTX).
+  set(CMAKE_CUDA_ARCHITECTURES OFF)
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --generate-code arch=compute_89,code=sm_89")
+
+  add_library(shmmw_perception_cuda
+    src/perception/frame_gen.cpp
+    src/perception/cpu_reference.cpp
+    src/perception/kernels.cu)
+  target_include_directories(shmmw_perception_cuda PUBLIC include)
+
+  add_executable(perception_bench src/perception/perception_bench.cpp)
+  target_link_libraries(perception_bench PRIVATE shmmw_perception_cuda)
+
+  add_executable(perception_node src/perception/perception_node.cpp)
+  target_link_libraries(perception_node PRIVATE shmmw_perception_cuda shmmw_core rt)
+
+  add_executable(viewer src/perception/viewer.cpp)
+  target_include_directories(viewer PRIVATE include)
+  target_link_libraries(viewer PRIVATE shmmw_core rt EGL GL)
+
+  add_executable(check_perception_kernels tests/test_perception_kernels.cpp)
+  target_link_libraries(check_perception_kernels PRIVATE shmmw_perception_cuda)
+  add_test(NAME check_perception_kernels COMMAND check_perception_kernels)
+
+  add_executable(check_frame_gen tests/test_frame_gen.cpp)
+  target_link_libraries(check_frame_gen PRIVATE shmmw_perception_cuda)
+  add_test(NAME check_frame_gen COMMAND check_frame_gen)
+else()
+  message(STATUS "No CUDA compiler found; skipping the perception extension")
+endif()

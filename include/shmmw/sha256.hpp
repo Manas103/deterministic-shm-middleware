@@ -22,12 +22,39 @@ public:
     }
 
     void update(const void* data, size_t len) {
+        // Processes full 64-byte blocks straight out of the caller's
+        // buffer and only ever copies the sub-64-byte remainder into
+        // buffer_; the previous version always appended the whole input to
+        // buffer_ first and then called vector::erase(begin, begin+64) once
+        // per block, which shifts everything after the erased block down
+        // by 64 bytes every time, an O(len) operation repeated len/64
+        // times. That is O(len^2) and was invisible at this repo's original
+        // call sizes (one 64-byte Message at a time) but took several
+        // minutes on an 8MB voxel-grid buffer in the perception extension's
+        // replay digest (see that README's Findings) before being found
+        // and fixed here, in the one shared utility, not worked around at
+        // the call site.
         const uint8_t* p = static_cast<const uint8_t*>(data);
         total_len_ += len;
-        buffer_.insert(buffer_.end(), p, p + len);
-        while (buffer_.size() >= 64) {
-            process_(buffer_.data());
-            buffer_.erase(buffer_.begin(), buffer_.begin() + 64);
+
+        if (!buffer_.empty()) {
+            size_t need = 64 - buffer_.size();
+            size_t take = need < len ? need : len;
+            buffer_.insert(buffer_.end(), p, p + take);
+            p += take;
+            len -= take;
+            if (buffer_.size() == 64) {
+                process_(buffer_.data());
+                buffer_.clear();
+            }
+        }
+        while (len >= 64) {
+            process_(p);
+            p += 64;
+            len -= 64;
+        }
+        if (len > 0) {
+            buffer_.insert(buffer_.end(), p, p + len);
         }
     }
 

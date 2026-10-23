@@ -1,0 +1,9 @@
+$ ./check_frame_gen
+5 checks, 0 failed
+
+$ ./check_perception_kernels
+30 of 30 frames exact GPU/CPU match
+64 checks, 0 failed
+
+$ ./check_sha256   (root test, re-run after the O(n) fix below; unaffected)
+check_sha256: 7 checks passed
