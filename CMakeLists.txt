@@ -56,6 +56,12 @@ target_link_libraries(snooper PRIVATE shmmw_core rt)
 add_executable(sim_reference src/sim_reference.cpp)
 target_link_libraries(sim_reference PRIVATE shmmw_core)
 
+add_executable(combine_digest src/combine_digest.cpp)
+target_link_libraries(combine_digest PRIVATE shmmw_core)
+
+add_executable(bridge_qos_bench src/bridge_qos_bench.cpp)
+target_link_libraries(bridge_qos_bench PRIVATE shmmw_core Threads::Threads)
+
 enable_testing()
 
 add_executable(check_ring_buffer tests/test_ring_buffer.cpp)
@@ -83,6 +89,10 @@ add_executable(check_engine tests/test_engine.cpp)
 target_link_libraries(check_engine PRIVATE shmmw_core)
 target_compile_definitions(check_engine PRIVATE SHMMW_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME check_engine COMMAND check_engine)
+
+add_executable(check_udp_bridge tests/test_udp_bridge.cpp)
+target_link_libraries(check_udp_bridge PRIVATE shmmw_core)
+add_test(NAME check_udp_bridge COMMAND check_udp_bridge)
 
 # GPU-resident perception extension (voxelize/project/composite CUDA
 # kernels, the OpenGL viewer, the host-round-trip-vs-device-resident

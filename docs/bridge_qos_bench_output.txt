@@ -1,0 +1,7 @@
+hosta=10.77.0.1 hostb=10.77.0.2, both shaped to 1Gbps
+---FIFO---
+{"role":"sender","policy":"fifo","control_sent":800,"lidar_chunks_sent":684103,"lidar_frames_started":457}
+{"role":"receiver","control_count":799,"control_p50_ns":29875,"control_p99_ns":51102,"control_max_ns":158823,"lidar_bytes":957653200,"wall_secs":7.998,"lidar_mbps":957.9}
+---EDF---
+{"role":"sender","policy":"edf","control_sent":800,"lidar_chunks_sent":682174,"lidar_frames_started":456}
+{"role":"receiver","control_count":800,"control_p50_ns":10322,"control_p99_ns":68428,"control_max_ns":150482,"lidar_bytes":955043600,"wall_secs":7.999,"lidar_mbps":955.2}

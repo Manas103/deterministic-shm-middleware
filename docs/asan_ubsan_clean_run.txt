@@ -1,0 +1,46 @@
+Test project /mnt/c/Users/Manas/Downloads/Auto Job Applier/Total Job Application process flow/projects/deterministic-shm-middleware/build_asan
+    Start 1: check_ring_buffer
+1/9 Test #1: check_ring_buffer ................   Passed    0.02 sec
+    Start 2: check_snooper
+2/9 Test #2: check_snooper ....................***Failed    0.03 sec
+AddressSanitizer:DEADLYSIGNAL
+=================================================================
+==1294==ERROR: AddressSanitizer: SEGV on unknown address 0x7adf2b64a000 (pc 0x5d115b9b832c bp 0x7fffeb3fcd10 sp 0x7fffeb3fcb00 T0)
+==1294==The signal is caused by a WRITE memory access.
+    #0 0x5d115b9b832c in test_readonly_mapping_faults_on_write() /mnt/c/Users/Manas/Downloads/Auto Job Applier/Total Job Application process flow/projects/deterministic-shm-middleware/tests/test_snooper.cpp:112
+    #1 0x5d115b9bc202 in main /mnt/c/Users/Manas/Downloads/Auto Job Applier/Total Job Application process flow/projects/deterministic-shm-middleware/tests/test_snooper.cpp:124
+    #2 0x7adf29c29d8f  (/lib/x86_64-linux-gnu/libc.so.6+0x29d8f)
+    #3 0x7adf29c29e3f in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x29e3f)
+    #4 0x5d115b9b36c4 in _start (/mnt/c/Users/Manas/Downloads/Auto Job Applier/Total Job Application process flow/projects/deterministic-shm-middleware/build_asan/check_snooper+0x1a6c4)
+
+AddressSanitizer can not provide additional info.
+SUMMARY: AddressSanitizer: SEGV /mnt/c/Users/Manas/Downloads/Auto Job Applier/Total Job Application process flow/projects/deterministic-shm-middleware/tests/test_snooper.cpp:112 in test_readonly_mapping_faults_on_write()
+==1294==ABORTING
+FAIL /mnt/c/Users/Manas/Downloads/Auto Job Applier/Total Job Application process flow/projects/deterministic-shm-middleware/tests/test_snooper.cpp:117: WIFSIGNALED(status)
+
+    Start 3: check_sha256
+3/9 Test #3: check_sha256 .....................   Passed    0.01 sec
+    Start 4: check_av_model
+4/9 Test #4: check_av_model ...................   Passed    0.02 sec
+    Start 5: check_scenario
+5/9 Test #5: check_scenario ...................   Passed    0.02 sec
+    Start 6: check_engine
+6/9 Test #6: check_engine .....................   Passed    0.68 sec
+    Start 7: check_udp_bridge
+7/9 Test #7: check_udp_bridge .................   Passed    0.02 sec
+    Start 8: check_perception_kernels
+8/9 Test #8: check_perception_kernels .........Subprocess aborted***Exception:   0.39 sec
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  CUDA error at /mnt/c/Users/Manas/Downloads/Auto Job Applier/Total Job Application process flow/projects/deterministic-shm-middleware/src/perception/kernels.cu:101: out of memory
+
+    Start 9: check_frame_gen
+9/9 Test #9: check_frame_gen ..................   Passed    0.04 sec
+
+78% tests passed, 2 tests failed out of 9
+
+Total Test time (real) =   1.30 sec
+
+The following tests FAILED:
+	  2 - check_snooper (Failed)
+	  8 - check_perception_kernels (Subprocess aborted)
+Errors while running CTest

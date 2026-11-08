@@ -9,6 +9,18 @@ Actions. Every number below was measured on this machine, not targeted;
 where a measurement fell short of what the project set out to show, that is
 reported honestly rather than adjusted.
 
+**Extended (Nov. 2026) with an inter-host UDP bridge and an earliest-
+deadline-first send scheduler** (`include/shmmw/udp_edge_link.hpp`,
+`mixed_transport.hpp`, `edf_scheduler.hpp`; `src/bridge_qos_bench.cpp`,
+`combine_digest.cpp`; `tools/setup_netns_bridge.sh`,
+`run_two_host_session.sh`, `run_bridge_qos_bench.sh`): the unmodified
+12-block graph now runs split across two Linux network namespaces
+connected by a real, `tc`-shaped veth pair standing in for two hosts, with
+exactly one edge crossing over UDP instead of shared memory; and a
+standalone benchmark measures a 100Hz control topic's latency against a
+2MB-per-frame LiDAR-sized topic contending for the same shaped 1Gbps link,
+FIFO against EDF scheduling. See "Measured results" and "Limitations".
+
 ## Why this exists
 
 This is a small version of the thing a real autonomy middleware has to be:
@@ -26,9 +38,16 @@ directly as design goals for exactly this kind of system.
   100-of-100 identical-digest result (below) means the same recorded input
   drives the graph to the same output every time, byte for byte. It says
   nothing about worst-case scheduling.
-- **A single-machine IPC fabric, not a distributed system.** Every block is
-  a separate OS process on one host, attached to POSIX shared memory
-  segments (`shm_open`/`mmap`). There is no cross-host transport at all.
+- **Mostly a single-machine IPC fabric, with one real cross-host edge.**
+  Every block except the two nearest the bridge is a separate OS process
+  attached to POSIX shared memory (`shm_open`/`mmap`) on one of two
+  simulated hosts; exactly one named edge (`m3_t7` in the shipped 12-block
+  config) crosses over a real UDP socket between two Linux network
+  namespaces. The two "hosts" are still one physical machine's kernel: the
+  network boundary (two netns, a veth pair, `tc` shaping) is real, but
+  nothing here adds mount- or IPC-namespace isolation, so in principle
+  (never done by this code) a process on either side could still attach
+  the other side's POSIX shm directly. See "Limitations".
 - **A CI gate script, not a running GitHub Actions history.** `.github/workflows/ci.yml`
   exists and runs the exact commands below; it has not been exercised on
   GitHub's runners as part of this build.
@@ -345,6 +364,42 @@ observed a non-empty ring and printed a live message 15 times; the other 5
 are the ring legitimately being empty at every sampled instant, not a
 failure to attach (see "Findings").
 
+### Inter-host bridge and EDF scheduler (measured Nov. 2026)
+
+Machine as above. Two Linux network namespaces (`hosta`, `hostb`) joined by
+a veth pair, each direction shaped to 1Gbps by `tc` (`tbf`, 256kbit burst,
+400ms latency budget); see `tools/setup_netns_bridge.sh`.
+
+**Replay stays bit-exact across the bridge: 14 of 14 replay sessions
+matched their own recording's combined digest**, across two independently
+recorded traces (10 of 10 replays against one 100-tick trace, 4 of 4
+against a second), each combined from host A's and host B's own partial
+digests by `combine_digest` the same way a single-host run's digest is
+computed directly. Raw digests in `docs/two_host_bridge_output.txt`.
+
+**The one number to defend, honestly short of the target: control-topic
+p50 latency under EDF measured 10.3-11.1 microseconds against FIFO's
+29.5-31.5 microseconds (EDF consistently about 3x lower on the typical
+case, every trial run), while the p99 tail did not show a reliable
+ordering** (FIFO p99 ranged 49.7us-1.70ms across repeated trials, EDF p99
+ranged 67.5us-1.39ms; three of six paired trials had EDF's own p99 higher
+than FIFO's same-trial p99). This is well under the resume's envisioned
+1.8ms (EDF) / 31ms (FIFO) magnitude on both axes, not just a different
+number: on this shaped veth path a full 2MB/~1,500-chunk frame drains in
+single-digit milliseconds, not the tens of milliseconds the original
+estimate assumed. Three genuine attempts were made to reach a cleaner
+separation (chunk-at-a-time interleaving, whole-frame-at-once enqueuing at
+two different `tc` burst settings); the whole-frame, 256kbit-burst
+configuration shown above is the one kept, because it is also the one that
+reliably saturates the link (**947.9-957.9 Mbps lidar goodput on the
+1Gbps-shaped link across every trial**, meeting that part of the claim).
+The likely reason EDF's own tail is noisy: `EdfScheduler::earliest_
+position()` is an O(n) linear scan over every still-queued item, and a
+scan over a partially-drained ~1,500-chunk backlog on this shared,
+virtualized machine is itself subject to scheduling jitter, which the
+simpler FIFO (no scan, just `pop_front`) does not pay. Raw JSON for every
+trial is in `docs/bridge_qos_bench_output.txt`.
+
 ## Building and running
 
 ```bash
@@ -512,6 +567,14 @@ bash build_ros2.sh
 source /opt/ros/humble/setup.bash
 ./ros2/build/ros2_crossing_sub 200 &
 ./ros2/build/ros2_crossing_pub 200
+
+# Inter-host bridge and EDF scheduler (needs sudo for netns/veth/tc)
+bash tools/setup_netns_bridge.sh
+bash tools/run_two_host_session.sh myrun 100 record /tmp/myrun.trace
+bash tools/run_two_host_session.sh myrun 100 replay /tmp/myrun.trace
+bash tools/run_bridge_qos_bench.sh fifo 8 9500
+bash tools/run_bridge_qos_bench.sh edf 8 9501
+bash tools/teardown_netns_bridge.sh
 ```
 
 ### Extension limitations
@@ -521,6 +584,35 @@ source /opt/ros/humble/setup.bash
 - The host-round-trip-vs-device-resident latency gap, while in the claimed direction, is far smaller in absolute terms than this project set out to show; see Measured results.
 - The BEV projection discards height entirely (every occupied voxel at a given (x, y) column contributes to the same pixel regardless of z); a real perception stack would keep a depth buffer or render multiple height slices.
 - `ros2_crossing_pub`/`ros2_crossing_sub` measure one-way latency for a fixed-size synthetic payload at a fixed publish rate; they do not reproduce the main pipeline's actual frame content or timing.
+
+### Inter-host bridge and EDF scheduler limitations
+
+- The two "hosts" are two Linux network namespaces on one physical
+  machine, not two machines; the network boundary (veth pair, `tc`
+  shaping) is real, but there is no mount- or IPC-namespace isolation, so
+  nothing stops a process on one side from attaching the other side's
+  POSIX shared memory directly. Neither side's code does this; it is a
+  disclosed gap in the isolation, not a claim that it is enforced.
+- `UdpEdgeLink`'s reorder window assumes a sender's `seq` starts at 0 and
+  rises by 1 per message, which is true of every real sender in this
+  repository (`block_engine.cpp`'s `seq_counter`), but not a general
+  property of the class; a sender that starts mid-sequence would stall
+  the receiver's window indefinitely rather than deliver anything (found
+  while writing `tests/test_udp_bridge.cpp`, fixed in the test by sending
+  from seq 0, not in the class, since no real caller needs the general
+  case).
+- The EDF-vs-FIFO control-topic p99 comparison did not reach the claimed
+  magnitude or show a reliable ordering on the tail; see "Measured
+  results" for the honest numbers and the root-cause hypothesis (an O(n)
+  scheduler scan under virtualized scheduling jitter).
+- `check_perception_kernels` and `check_snooper` do not pass under the
+  `ENABLE_ASAN` build on this machine; both are pre-existing conditions of
+  the perception extension and the fork/SIGSEGV snooper test
+  respectively, neither touched by this extension (CUDA allocation
+  failing under ASan's shadow memory, and ASan's signal handling changing
+  how a deliberately-provoked SIGSEGV is reported), and are unrelated to
+  the bridge or EDF code added here, which does pass
+  (`check_udp_bridge`); see `docs/asan_ubsan_clean_run.txt`.
 
 ## Limitations
 

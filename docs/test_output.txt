@@ -1,8 +1,23 @@
-=== check_ring_buffer (Release) ===
-check_ring_buffer: 55313 checks passed
+Test project /mnt/c/Users/Manas/Downloads/Auto Job Applier/Total Job Application process flow/projects/deterministic-shm-middleware/build
+    Start 1: check_ring_buffer
+1/9 Test #1: check_ring_buffer ................   Passed    0.01 sec
+    Start 2: check_snooper
+2/9 Test #2: check_snooper ....................   Passed    0.01 sec
+    Start 3: check_sha256
+3/9 Test #3: check_sha256 .....................   Passed    0.00 sec
+    Start 4: check_av_model
+4/9 Test #4: check_av_model ...................   Passed    0.01 sec
+    Start 5: check_scenario
+5/9 Test #5: check_scenario ...................   Passed    0.01 sec
+    Start 6: check_engine
+6/9 Test #6: check_engine .....................   Passed    0.37 sec
+    Start 7: check_udp_bridge
+7/9 Test #7: check_udp_bridge .................   Passed    0.01 sec
+    Start 8: check_perception_kernels
+8/9 Test #8: check_perception_kernels .........   Passed    0.45 sec
+    Start 9: check_frame_gen
+9/9 Test #9: check_frame_gen ..................   Passed    0.01 sec
 
-=== check_sha256 (Release) ===
-check_sha256: 7 checks passed
+100% tests passed, 0 tests failed out of 9
 
-=== check_snooper (Release) ===
-check_snooper: 138 checks passed
+Total Test time (real) =   0.93 sec

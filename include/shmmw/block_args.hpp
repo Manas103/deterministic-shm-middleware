@@ -20,6 +20,16 @@ struct BlockArgs {
     uint32_t num_blocks = 0;                           // start barrier size; 0 disables it
     std::map<std::string, uint32_t> edge_cap_override; // shm only: edge name -> forced ring capacity
     EngineOptions engine;
+
+    // Inter-host bridge: at most one of this block's edges crosses a host
+    // boundary over UDP instead of shared memory (see udp_edge_link.hpp,
+    // mixed_transport.hpp). Empty bridge_edge means this block is entirely
+    // local, the common case.
+    std::string bridge_edge;
+    std::string bridge_role;      // "sender" | "receiver"
+    std::string bridge_peer_ip;   // sender only
+    int bridge_peer_port = 0;     // sender only
+    int bridge_listen_port = 0;   // receiver only
 };
 
 inline BlockArgs parse_block_args(int argc, char** argv) {
@@ -46,6 +56,11 @@ inline BlockArgs parse_block_args(int argc, char** argv) {
         }
         else if (k == "--inject-delay-ns") a.engine.inject_delay_ns = std::stoll(next());
         else if (k == "--idle-timeout-ms") a.engine.idle_timeout_ns = std::stoll(next()) * 1'000'000LL;
+        else if (k == "--bridge-edge") a.bridge_edge = next();
+        else if (k == "--bridge-role") a.bridge_role = next();
+        else if (k == "--bridge-peer-ip") a.bridge_peer_ip = next();
+        else if (k == "--bridge-peer-port") a.bridge_peer_port = std::stoi(next());
+        else if (k == "--bridge-listen-port") a.bridge_listen_port = std::stoi(next());
     }
     return a;
 }

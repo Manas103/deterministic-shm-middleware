@@ -21,12 +21,14 @@
 #include "shmmw/block_args.hpp"
 #include "shmmw/graph_config.hpp"
 #include "shmmw/kernels.hpp"
+#include "shmmw/mixed_transport.hpp"
 #include "shmmw/ring_buffer.hpp"
 #include "shmmw/scenario.hpp"
 #include "shmmw/shm_names.hpp"
 #include "shmmw/shm_segment.hpp"
 #include "shmmw/shm_transport.hpp"
 #include "shmmw/stats.hpp"
+#include "shmmw/udp_edge_link.hpp"
 
 using namespace shmmw;
 
@@ -54,14 +56,39 @@ int main(int argc, char** argv) {
 
     std::vector<ShmSegment> segs;
     std::vector<void*> in_mems, out_mems;
-    auto attach_edge = [&](const std::string& edge) {
+    int bridge_input_index = -1, bridge_output_index = -1;
+    auto attach_edge = [&](const std::string& edge) -> void* {
+        if (!a.bridge_edge.empty() && edge == a.bridge_edge) return nullptr; // crosses the host boundary over UDP
         const uint32_t cap = a.edge_cap_override.count(edge) ? a.edge_cap_override.at(edge) : kDefaultEdgeCapacity;
         segs.push_back(ShmSegment::attach(shm_edge_name(a.run_id, edge), EdgeRing::size_for(cap)));
         return segs.back().data();
     };
-    for (auto& e : bc->input_edges) in_mems.push_back(attach_edge(e));
-    for (auto& e : bc->output_edges) out_mems.push_back(attach_edge(e));
-    ShmTransport transport(in_mems, out_mems);
+    for (size_t i = 0; i < bc->input_edges.size(); ++i) {
+        if (!a.bridge_edge.empty() && bc->input_edges[i] == a.bridge_edge) bridge_input_index = static_cast<int>(i);
+        in_mems.push_back(attach_edge(bc->input_edges[i]));
+    }
+    for (size_t i = 0; i < bc->output_edges.size(); ++i) {
+        if (!a.bridge_edge.empty() && bc->output_edges[i] == a.bridge_edge) bridge_output_index = static_cast<int>(i);
+        out_mems.push_back(attach_edge(bc->output_edges[i]));
+    }
+
+    const bool this_block_has_bridge = bridge_input_index >= 0 || bridge_output_index >= 0;
+    std::unique_ptr<ITransport> transport;
+    if (!this_block_has_bridge) {
+        transport = std::make_unique<ShmTransport>(in_mems, out_mems);
+    } else {
+        std::unique_ptr<UdpEdgeLink> link;
+        if (a.bridge_role == "sender") {
+            link = std::make_unique<UdpEdgeLink>(UdpEdgeLink::make_sender(a.bridge_peer_ip, a.bridge_peer_port));
+        } else if (a.bridge_role == "receiver") {
+            link = std::make_unique<UdpEdgeLink>(UdpEdgeLink::make_receiver(a.bridge_listen_port));
+        } else {
+            std::fprintf(stderr, "--bridge-edge given without --bridge-role sender|receiver\n");
+            return 1;
+        }
+        transport = std::make_unique<MixedTransport>(in_mems, out_mems, bridge_input_index, bridge_output_index,
+                                                       std::move(link));
+    }
 
     if (a.num_blocks > 0) {
         ShmSegment barrier_seg = ShmSegment::attach(shm_barrier_name(a.run_id), sizeof(StartBarrier));
@@ -71,5 +98,5 @@ int main(int argc, char** argv) {
     }
 
     BlockIo io{&log, &hop_log, stats};
-    return run_block(g, *bc, *kernel, transport, io, a.engine);
+    return run_block(g, *bc, *kernel, *transport, io, a.engine);
 }

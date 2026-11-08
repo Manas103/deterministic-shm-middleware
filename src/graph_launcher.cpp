@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -50,6 +51,17 @@ struct Options {
     std::string transport = "shm";
     std::string scenario_path;
     std::string idle_timeout_ms;
+
+    // Inter-host bridge (see block_args.hpp, mixed_transport.hpp): this
+    // invocation only forks the blocks named in only_blocks (empty means
+    // every block in the config, the single-host default), and never
+    // creates a shm segment for bridge_edge, which crosses over UDP.
+    std::string only_blocks;
+    std::string bridge_edge;
+    std::string bridge_role;
+    std::string bridge_peer_ip;
+    std::string bridge_peer_port;
+    std::string bridge_listen_port;
 };
 
 Options parse(int argc, char** argv) {
@@ -72,8 +84,22 @@ Options parse(int argc, char** argv) {
         else if (k == "--transport") o.transport = next();
         else if (k == "--scenario") o.scenario_path = next();
         else if (k == "--idle-timeout-ms") o.idle_timeout_ms = next();
+        else if (k == "--only-blocks") o.only_blocks = next();
+        else if (k == "--bridge-edge") o.bridge_edge = next();
+        else if (k == "--bridge-role") o.bridge_role = next();
+        else if (k == "--bridge-peer-ip") o.bridge_peer_ip = next();
+        else if (k == "--bridge-peer-port") o.bridge_peer_port = next();
+        else if (k == "--bridge-listen-port") o.bridge_listen_port = next();
     }
     return o;
+}
+
+std::vector<std::string> split_csv(const std::string& s) {
+    std::vector<std::string> out;
+    std::stringstream ss(s);
+    std::string item;
+    while (std::getline(ss, item, ',')) if (!item.empty()) out.push_back(item);
+    return out;
 }
 
 std::map<std::string, uint32_t> parse_small_edges(const std::string& s) {
@@ -102,17 +128,42 @@ int main(int argc, char** argv) {
     GraphConfig g = load_graph_config(o.config_path);
     auto small = parse_small_edges(o.small_edges);
 
-    // 1. Create every segment before any block process exists.
+    // This invocation's blocks: every block in the config (single-host,
+    // the default), or only the named subset (--only-blocks, one host's
+    // share of a graph split across a bridge edge).
+    std::vector<BlockConfig> host_blocks = g.blocks;
+    if (!o.only_blocks.empty()) {
+        auto wanted = split_csv(o.only_blocks);
+        host_blocks.clear();
+        for (auto& b : g.blocks) {
+            if (std::find(wanted.begin(), wanted.end(), b.name) != wanted.end()) host_blocks.push_back(b);
+        }
+    }
+
+    // 1. Create every segment before any block process exists. The bridge
+    // edge (if any) never gets a shm segment on either host: it crosses
+    // over UDP instead (see block_runner.cpp, mixed_transport.hpp).
     std::vector<ShmSegment> edge_segs, stats_segs;
     if (o.transport == "shm") {
         for (auto& e : g.edges) {
+            if (!o.bridge_edge.empty() && e.name == o.bridge_edge) continue;
+            bool local = o.only_blocks.empty();
+            if (!local) {
+                for (auto& b : host_blocks) {
+                    if (std::find(b.input_edges.begin(), b.input_edges.end(), e.name) != b.input_edges.end() ||
+                        std::find(b.output_edges.begin(), b.output_edges.end(), e.name) != b.output_edges.end()) {
+                        local = true;
+                    }
+                }
+            }
+            if (!local) continue; // belongs entirely to the other host's subset
             uint32_t cap = small.count(e.name) ? small[e.name] : kDefaultEdgeCapacity;
             ShmSegment seg = ShmSegment::create(shm_edge_name(o.run_id, e.name), EdgeRing::size_for(cap));
             EdgeRing::init(seg.data(), cap);
             edge_segs.push_back(std::move(seg));
         }
     }
-    for (auto& b : g.blocks) {
+    for (auto& b : host_blocks) {
         ShmSegment seg = ShmSegment::create(shm_stats_name(o.run_id, b.name), sizeof(BlockStats));
         new (seg.data()) BlockStats();
         stats_segs.push_back(std::move(seg));
@@ -120,10 +171,10 @@ int main(int argc, char** argv) {
     ShmSegment barrier_seg = ShmSegment::create(shm_barrier_name(o.run_id), sizeof(StartBarrier));
     new (barrier_seg.data()) StartBarrier();
 
-    // 2. Fork+exec one block process per block.
+    // 2. Fork+exec one block process per block this host runs.
     std::vector<pid_t> pids;
     std::vector<std::string> log_paths;
-    for (auto& b : g.blocks) {
+    for (auto& b : host_blocks) {
         std::string log_path = o.log_dir + "/" + o.run_id + "_" + b.name + ".log";
         log_paths.push_back(log_path);
 
@@ -139,7 +190,7 @@ int main(int argc, char** argv) {
                 "--rate-hz", std::to_string(o.rate_hz),
                 "--log", log_path,
                 "--merge-mode", o.merge_mode,
-                "--num-blocks", std::to_string(g.blocks.size()),
+                "--num-blocks", std::to_string(host_blocks.size()),
             };
             if (b.type == BlockType::Source) {
                 args.push_back("--mode"); args.push_back(o.mode);
@@ -150,6 +201,13 @@ int main(int argc, char** argv) {
             if (!o.small_edges.empty()) { args.push_back("--edge-cap-small"); args.push_back(o.small_edges); }
             if (!o.regress_block.empty() && b.name == o.regress_block) {
                 args.push_back("--inject-delay-ns"); args.push_back(std::to_string(o.regress_delay_ns));
+            }
+            if (!o.bridge_edge.empty()) {
+                args.push_back("--bridge-edge"); args.push_back(o.bridge_edge);
+                args.push_back("--bridge-role"); args.push_back(o.bridge_role);
+                if (!o.bridge_peer_ip.empty()) { args.push_back("--bridge-peer-ip"); args.push_back(o.bridge_peer_ip); }
+                if (!o.bridge_peer_port.empty()) { args.push_back("--bridge-peer-port"); args.push_back(o.bridge_peer_port); }
+                if (!o.bridge_listen_port.empty()) { args.push_back("--bridge-listen-port"); args.push_back(o.bridge_listen_port); }
             }
 
             std::vector<char*> cargs;
@@ -171,10 +229,14 @@ int main(int argc, char** argv) {
     }
 
     // 4. Aggregate in fixed (config) order, so the digest does not depend on
-    // which order the child processes happened to exit.
+    // which order the child processes happened to exit. When --only-blocks
+    // split the graph across a bridge, this is this host's partial digest
+    // over its own blocks only; tools/combine_digest.cpp combines both
+    // hosts' partial logs into the one digest a single-host run would have
+    // produced directly.
     std::vector<std::string> names, logs;
-    for (size_t i = 0; i < g.blocks.size(); ++i) {
-        names.push_back(g.blocks[i].name);
+    for (size_t i = 0; i < host_blocks.size(); ++i) {
+        names.push_back(host_blocks[i].name);
         logs.push_back(read_file(log_paths[i]));
     }
     const std::string digest = session_digest(names, logs);
